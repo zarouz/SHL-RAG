@@ -21,6 +21,18 @@ The system consists of a FastAPI backend API and a Streamlit frontend, designed 
 - **Cloud Build Integration:** Provides `cloudbuild-*.yaml` files for automated container builds on Google Cloud Build.
 - **Data Preparation Scripts:** Includes scripts for web scraping SHL assessment data, processing text, generating embeddings, and creating fine-tuning data (optional).
 
+## Data Pipeline: Scraping, Transformation, and Embedding
+
+The foundation of the recommendation system relies on a robust data pipeline to process SHL assessment information:
+
+1.  **Web Scraping:** Initial data is gathered by scraping relevant pages from the SHL website(s). Scripts like `collect_data.py` and `add_links.py` (and potentially others in the root directory) handle this process, likely using libraries such as `requests` and `BeautifulSoup4` to fetch and parse HTML content. Raw data might be stored temporarily in CSV files (e.g., `shl_individual_solutions_data.csv`, `shl_solutions_merged_final.csv`).
+2.  **Data Cleaning & Transformation:** The scraped text undergoes cleaning and transformation to prepare it for embedding. This may involve removing HTML tags, standardizing text, merging data from different sources (`merge_csvs.py`), and potentially extracting specific fields.
+3.  **Text Chunking:** The processed text descriptions for each assessment are divided into smaller, meaningful chunks. This is crucial for effective retrieval, ensuring that embeddings capture specific details. The results are likely stored in files like `processed_shl_chunks.jsonl`.
+4.  **Embedding Generation:** A fine-tuned Sentence Transformer model (e.g., from the `shl_finetuned_mpnet_model_H100` directory) is used to convert these text chunks into dense vector representations (embeddings). The `create_store_embeddings.py` script orchestrates this, utilizing the model loaded via `src/retriever.py`.
+5.  **Vector Storage:** The generated embeddings, along with their corresponding text chunks and metadata, are stored in the PostgreSQL database configured with the `pgvector` extension. This allows for efficient similarity searches using vector operations, forming the core of the retrieval mechanism in the RAG pipeline. The `create_store_embeddings.py` script handles the database insertion.
+
+This pipeline ensures that the RAG system has access to a well-structured and semantically searchable knowledge base of SHL assessments.
+
 ## Architecture
 
 The system is designed as two separate microservices deployed on Google Cloud Run:
@@ -42,6 +54,9 @@ The system is designed as two separate microservices deployed on Google Cloud Ru
     - Takes user input (query or job description text/URL).
     - Calls the `/recommend` endpoint of the `api-service`.
     - Displays the returned assessment recommendations in a structured format.
+
+![Simple Architecture Diagram (Conceptual)](https://mermaid.ink/img/pako:eNqdU8tuwyAQ_BXLF1ggQIJLyqkHnTp1q9WqG0uATYwNaRNLKVXfu8eY7OKyA8uzMzsP2MFEICh1C9kQJ6l09tH_yDgy71U4k3i9rG1B6FhOqC0D7VfD4bYk-vX4Xb2qMvW4H57V3DDBwQ92Bw8qV4d-26W_04l8_yL3Q-dF3U9a47wN7WJ0y6X-9X1XzRplq3f4k9m_JkP0G39aVjXJkG1wzMow77qR2yB0QO50Lh_j7b6z5oO9rC4k7c31v9-6bC5UqCqQyLzR1qH9Y_U9b6kGq7c2sD5q1m2uTsqhH8U2x9tW64jE0g932s0iW1nQv2fV9p2k1p-4yJk127Oq4XhHn4yU09d74-s8QJ2g2jQxK1-YpC4Gg3qF9I8wG3T018x-rA862wF3L8W2tU8Yk9mK_8oQ61q5k3-sDqG3b-b5o7o_gq-5yJvO-5yJb-Z_41vJ-b5-Z_7b-f-5__gP1d0QkQ?type=png)
+_(Diagram shows Frontend talking to API, API talking to Cloud SQL and Gemini, both using Secrets)_
 
 ## Technology Stack
 
