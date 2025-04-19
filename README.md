@@ -43,9 +43,6 @@ The system is designed as two separate microservices deployed on Google Cloud Ru
     - Calls the `/recommend` endpoint of the `api-service`.
     - Displays the returned assessment recommendations in a structured format.
 
-![Simple Architecture Diagram (Conceptual)](https://mermaid.ink/img/pako:eNqdU8tuwyAQ_BXLF1ggQIJLyqkHnTp1q9WqG0uATYwNaRNLKVXfu8eY7OKyA8uzMzsP2MFEICh1C9kQJ6l09tH_yDgy71U4k3i9rG1B6FhOqC0D7VfD4bYk-vX4Xb2qMvW4H57V3DDBwQ92Bw8qV4d-26W_04l8_yL3Q-dF3U9a47wN7WJ0y6X-9X1XzRplq3f4k9m_JkP0G39aVjXJkG1wzMow77qR2yB0QO50Lh_j7b6z5oO9rC4k7c31v9-6bC5UqCqQyLzR1qH9Y_U9b6kGq7c2sD5q1m2uTsqhH8U2x9tW64jE0g932s0iW1nQv2fV9p2k1p-4yJk127Oq4XhHn4yU09d74-s8QJ2g2jQxK1-YpC4Gg3qF9I8wG3T018x-rA862wF3L8W2tU8Yk9mK_8oQ61q5k3-sDqG3b-b5o7o_gq-5yJvO-5yJb-Z_41vJ-b5-Z_7b-f-5__gP1d0QkQ?type=png)
-_(Diagram shows Frontend talking to API, API talking to Cloud SQL and Gemini, both using Secrets)_
-
 ## Technology Stack
 
 - **Backend:** Python, FastAPI, Uvicorn
