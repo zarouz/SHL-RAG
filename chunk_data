@@ -1,0 +1,294 @@
+# -*- coding: utf-8 -*-
+import pandas as pd
+import fitz # PyMuPDF
+import os
+import json
+import re
+import time
+import logging
+from langchain.text_splitter import RecursiveCharacterTextSplitter # Using Langchain's splitter
+# Alternatively, use tiktoken directly if not using Langchain
+# import tiktoken
+
+# --- Configuration ---
+INPUT_CSV_FILENAME = "shl_solutions_merged_final.csv" # Make sure this is your combined CSV
+OUTPUT_JSONL_FILENAME = "processed_shl_chunks.jsonl"
+PDF_BASE_FOLDER = "pdfs_individual" # Assuming this is the relative folder name
+
+# Chunking Parameters (tune these based on your embedding model and needs)
+# Using token count is generally better than character count for LLMs/Embeddings
+# Requires tiktoken: pip install tiktoken
+# encoding_name = "cl100k_base" # Example for many newer models
+# tokenizer = tiktoken.get_encoding(encoding_name)
+# def tiktoken_len(text):
+#     tokens = tokenizer.encode(text, disallowed_special=())
+#     return len(tokens)
+
+# TEXT_SPLITTER_CHUNK_SIZE = 400 # Target size in TOKENS
+# TEXT_SPLITTER_CHUNK_OVERLAP = 50 # Overlap in TOKENS
+# LENGTH_FUNCTION = tiktoken_len
+
+# --- OR --- Simpler Character Count (less precise for models)
+TEXT_SPLITTER_CHUNK_SIZE = 1500 # Target size in CHARACTERS
+TEXT_SPLITTER_CHUNK_OVERLAP = 150 # Overlap in CHARACTERS
+LENGTH_FUNCTION = len
+# -----------
+
+# --- Setup Logging ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+log = logging.getLogger(__name__)
+
+# --- Helper Functions ---
+
+# ********** ADD THIS FUNCTION BACK **********
+def sanitize_filename(filename):
+    """Removes invalid characters and shortens long filenames."""
+    sanitized = re.sub(r'[\\/*?:"<>|]', "", filename)
+    sanitized = sanitized.replace(' ', '_')
+    max_len = 150
+    if len(sanitized) > max_len:
+        name, ext = os.path.splitext(sanitized)
+        ext = ext[:10] if len(ext) > 10 else ext
+        name = name[:max_len - len(ext) -1]
+        sanitized = name + ext
+    sanitized = sanitized.strip('._ ')
+    if not sanitized:
+        sanitized = f"sanitized_file_{int(time.time())}"
+    return sanitized
+# *******************************************
+
+def extract_text_from_pdf(pdf_path):
+    """Extracts text from a PDF file using PyMuPDF."""
+    if not os.path.exists(pdf_path):
+        log.warning(f"PDF file not found: {pdf_path}")
+        return None
+    try:
+        doc = fitz.open(pdf_path)
+        full_text = ""
+        for page_num in range(len(doc)):
+            page = doc.load_page(page_num)
+            full_text += page.get_text("text") + "\n" # Add newline between pages
+        doc.close()
+        # Basic cleaning: remove excessive newlines/whitespace
+        full_text = re.sub(r'\s*\n\s*', '\n', full_text).strip()
+        full_text = re.sub(r'[ \t]{2,}', ' ', full_text) # Replace multiple spaces/tabs with one
+        log.debug(f"Successfully extracted text from {pdf_path} (length: {len(full_text)})")
+        return full_text
+    except Exception as e:
+        log.error(f"Error extracting text from {pdf_path}: {e}")
+        return None
+
+def chunk_text(text, chunk_size, chunk_overlap, length_func=len):
+    """Chunks text using RecursiveCharacterTextSplitter."""
+    if not text:
+        return []
+    try:
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=chunk_size,
+            chunk_overlap=chunk_overlap,
+            length_function=length_func,
+            # Common separators for technical/report documents
+            separators=["\n\n", "\n", ". ", ", ", " ", ""],
+            add_start_index=False, # We don't need start index for this use case
+        )
+        return text_splitter.split_text(text)
+    except Exception as e:
+        log.error(f"Error chunking text: {e}")
+        # Fallback: very simple split if library fails
+        return text.split("\n\n")
+
+def parse_metadata_list(metadata_string):
+    """Parses comma-separated string into a list, handling N/A."""
+    if pd.isna(metadata_string) or not isinstance(metadata_string, str) or metadata_string.strip().upper() == 'N/A':
+        return []
+    items = [item.strip() for item in metadata_string.split(',') if item.strip()]
+    return items
+
+def parse_metadata_test_type(metadata_string):
+    """Parses space-separated test types into a list, handling N/A."""
+    if pd.isna(metadata_string) or not isinstance(metadata_string, str) or metadata_string.strip().upper() == 'N/A':
+        return []
+    # Split by space, handle potential multiple spaces, filter empty
+    items = [item.strip() for item in re.split(r'\s+', metadata_string) if item.strip()]
+    return items
+
+
+def parse_metadata_boolean(metadata_string):
+    """Parses Yes/No string into boolean, handling N/A."""
+    if pd.isna(metadata_string) or not isinstance(metadata_string, str):
+        return None # Use None for unknown boolean state
+    return metadata_string.strip().lower() == 'yes'
+
+def parse_metadata_int(metadata_string):
+    """Parses string to integer, handling N/A and errors."""
+    if pd.isna(metadata_string) or not isinstance(metadata_string, str):
+        return None
+    try:
+        # Extract digits using regex first
+        match = re.search(r'\d+', metadata_string)
+        if match:
+            return int(match.group(0))
+        else:
+            return None # Cannot find number
+    except (ValueError, TypeError):
+        return None
+
+# --- Main Processing Logic ---
+def process_data(input_csv, output_jsonl):
+    """Reads CSV, extracts PDF text, chunks data, saves to JSON Lines."""
+    log.info(f"Reading input CSV: {input_csv}")
+    try:
+        df = pd.read_csv(input_csv)
+        log.info(f"Read {len(df)} rows from {input_csv}.")
+    except FileNotFoundError:
+        log.critical(f"CRITICAL ERROR: Input file not found: {input_csv}")
+        return
+    except Exception as e:
+        log.critical(f"CRITICAL ERROR reading CSV {input_csv}: {e}", exc_info=True)
+        return
+
+    required_columns = [
+        "Solution Name", "Description", "Job Levels", "Languages",
+        "Assessment Length", "Remote Testing", "Adaptive/IRT", "Test Type",
+        "Detail URL", "PDF Paths"
+    ]
+    if not all(col in df.columns for col in required_columns):
+        missing = [col for col in required_columns if col not in df.columns]
+        log.critical(f"CRITICAL ERROR: Input CSV missing required columns: {missing}")
+        return
+
+    all_chunks_with_metadata = []
+    processed_count = 0
+    error_count = 0
+
+    log.info("Starting data processing and chunking...")
+    for index, row in df.iterrows():
+        solution_name = row.get("Solution Name", f"Unnamed Solution Row {index}")
+        log.info(f"--- Processing Solution {index+1}/{len(df)}: {solution_name} ---")
+
+        try:
+            # --- Extract and Clean Metadata ---
+            description = row.get("Description", "N/A") if not pd.isna(row.get("Description")) else "N/A"
+            job_levels_str = row.get("Job Levels", "N/A")
+            languages_str = row.get("Languages", "N/A")
+            length_str = str(row.get("Assessment Length", "N/A")) # Ensure string for parsing
+            test_type_str = row.get("Test Type", "N/A")
+            remote_str = row.get("Remote Testing", "N/A")
+            adaptive_str = row.get("Adaptive/IRT", "N/A")
+            detail_url = row.get("Detail URL", "N/A") if not pd.isna(row.get("Detail URL")) else "N/A"
+            pdf_paths_str = row.get("PDF Paths", "") if not pd.isna(row.get("PDF Paths")) else ""
+
+            # Parse metadata into useful types for filtering later
+            metadata_base = {
+                "solution_name": solution_name,
+                "job_levels": parse_metadata_list(job_levels_str),
+                "languages": parse_metadata_list(languages_str),
+                "assessment_length": parse_metadata_int(length_str),
+                "test_type": parse_metadata_test_type(test_type_str),
+                "remote_testing": parse_metadata_boolean(remote_str),
+                "adaptive_irt": parse_metadata_boolean(adaptive_str),
+                "detail_url": detail_url
+            }
+
+            # --- Create Core Info Chunk ---
+            core_info_parts = [
+                f"Solution Name: {solution_name}",
+                f"Description: {description}",
+                f"Job Levels: {job_levels_str if not pd.isna(job_levels_str) else 'N/A'}", # Use original string for text
+                f"Languages: {languages_str if not pd.isna(languages_str) else 'N/A'}", # Use original string for text
+                f"Assessment Length (minutes): {length_str if not pd.isna(length_str) else 'N/A'}", # Use original string
+                f"Test Type: {test_type_str if not pd.isna(test_type_str) else 'N/A'}", # Use original string
+                f"Remote Testing: {remote_str if not pd.isna(remote_str) else 'N/A'}", # Use original string
+                f"Adaptive/IRT: {adaptive_str if not pd.isna(adaptive_str) else 'N/A'}", # Use original string
+                f"Detail URL: {detail_url}",
+            ]
+            core_info_text = "\n".join(core_info_parts)
+
+            core_metadata = metadata_base.copy()
+            core_metadata["source_type"] = "core_info"
+            core_metadata["original_pdf_filename"] = None # No PDF source
+
+            all_chunks_with_metadata.append({
+                "chunk_text": core_info_text,
+                "metadata": core_metadata
+            })
+            log.debug(f"  Added Core Info chunk for {solution_name}")
+
+            # --- Process and Chunk PDFs ---
+            pdf_paths = [p.strip() for p in pdf_paths_str.split(';') if p.strip()]
+            log.info(f"  Found {len(pdf_paths)} PDF paths to process for {solution_name}")
+
+            for pdf_full_path in pdf_paths:
+                # Construct the actual path if it's relative
+                if not os.path.isabs(pdf_full_path):
+                    pdf_filename_only = os.path.basename(pdf_full_path)
+                    potential_path = os.path.join(PDF_BASE_FOLDER, pdf_filename_only)
+                    log.debug(f" Checking potential relative path: {potential_path}")
+                    if os.path.exists(potential_path):
+                         pdf_path_to_use = potential_path
+                         log.debug(f"  Using reconstructed path: {pdf_path_to_use}")
+                    elif os.path.exists(pdf_full_path): # Check if original path works
+                         pdf_path_to_use = pdf_full_path
+                         log.debug(f"  Using original path from CSV: {pdf_path_to_use}")
+                    else:
+                        log.warning(f"  Cannot find PDF at original path '{pdf_full_path}' or reconstructed path '{potential_path}'. Skipping.")
+                        continue
+                elif os.path.exists(pdf_full_path):
+                     pdf_path_to_use = pdf_full_path # It's an absolute path that exists
+                     log.debug(f"  Using absolute path from CSV: {pdf_path_to_use}")
+                else:
+                    log.warning(f"  Absolute PDF path from CSV does not exist: '{pdf_full_path}'. Skipping.")
+                    continue
+
+
+                pdf_filename = os.path.basename(pdf_path_to_use)
+                log.info(f"   Processing PDF: {pdf_filename}")
+                full_pdf_text = extract_text_from_pdf(pdf_path_to_use)
+
+                if full_pdf_text:
+                    pdf_chunks = chunk_text(
+                        full_pdf_text,
+                        TEXT_SPLITTER_CHUNK_SIZE,
+                        TEXT_SPLITTER_CHUNK_OVERLAP,
+                        LENGTH_FUNCTION
+                    )
+                    log.info(f"    Chunked '{pdf_filename}' into {len(pdf_chunks)} chunks.")
+
+                    for i, chunk in enumerate(pdf_chunks):
+                        pdf_metadata = metadata_base.copy()
+                        # Use sanitize_filename for source_type
+                        pdf_metadata["source_type"] = f"pdf_{sanitize_filename(os.path.splitext(pdf_filename)[0])}"
+                        pdf_metadata["original_pdf_filename"] = pdf_filename
+                        pdf_metadata["chunk_index"] = i # Optional: track chunk order within PDF
+
+                        all_chunks_with_metadata.append({
+                            "chunk_text": chunk,
+                            "metadata": pdf_metadata
+                        })
+                    log.debug(f"   Added {len(pdf_chunks)} chunks from {pdf_filename}")
+            processed_count += 1
+
+        except Exception as e:
+            log.error(f"Failed processing row {index} for '{solution_name}': {e}", exc_info=True)
+            error_count += 1 # Increment error count
+            continue # Skip to next solution on error
+
+    log.info(f"Finished processing. Successfully processed: {processed_count}/{len(df)} solutions. Errors encountered: {error_count}.")
+    log.info(f"Total chunks generated: {len(all_chunks_with_metadata)}")
+
+    # --- Write to JSON Lines file ---
+    log.info(f"Writing processed chunks to {output_jsonl}...")
+    try:
+        with open(output_jsonl, 'w', encoding='utf-8') as outfile:
+            for item in all_chunks_with_metadata:
+                outfile.write(json.dumps(item) + '\n')
+        log.info(f"Successfully wrote {len(all_chunks_with_metadata)} chunks to {output_jsonl}")
+    except IOError as e:
+        log.critical(f"CRITICAL ERROR writing to JSONL file {output_jsonl}: {e}", exc_info=True)
+    except Exception as e:
+        log.critical(f"CRITICAL UNEXPECTED ERROR during JSONL writing: {e}", exc_info=True)
+
+
+# --- Run the Processing ---
+if __name__ == "__main__":
+    process_data(INPUT_CSV_FILENAME, OUTPUT_JSONL_FILENAME)

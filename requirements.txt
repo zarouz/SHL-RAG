@@ -1,0 +1,27 @@
+# Core LLM and Environment
+google-generativeai
+python-dotenv
+
+# Embedding Model & ML
+sentence-transformers
+torch # Or torch specific to CUDA/MPS if needed, but base usually works
+numpy # Required by pgvector adapter
+
+# Database
+psycopg2-binary # For PostgreSQL connection
+pgvector # For vector operations in PostgreSQL
+# cloud-sql-python-connector[psycopg2] # Removed as using proxy sidecar
+
+# API Framework
+fastapi
+uvicorn[standard] # ASGI server with standard extras
+
+# Web Demo UI
+streamlit
+pandas # For data display in Streamlit
+requests # For Streamlit app to call the API
+tabulate # Required by pandas for df.to_markdown()
+beautifulsoup4 # For parsing HTML from URLs
+
+
+google-cloud-storage

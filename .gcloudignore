@@ -1,0 +1,43 @@
+# .gcloudignore - Files and directories to ignore during App Engine deployment
+
+# Python virtual environment
+.venv/
+venv/
+env/
+
+# Python bytecode and cache
+__pycache__/
+*.py[cod]
+*$py.class
+
+# IDE / Editor specific files
+.vscode/
+.idea/
+*.swp
+*~
+.DS_Store
+
+# Local environment configuration
+.env
+
+# Git directory
+.git/
+.gitignore
+
+# Data files that are processed into the DB (if large or not needed in deployment)
+processed_shl_chunks.jsonl
+finetuning_triplets_v2_english.jsonl
+*.csv
+data/
+pdfs_individual/
+
+# Debugging output / temporary files
+debug_detail_pages/
+debug_detail_pages_v2/
+chunk_data/
+
+# Model directory (now deploying with app)
+# shl_finetuned_mpnet_model_H100/
+
+# macOS files
+.AppleDouble

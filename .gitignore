@@ -1,0 +1,12 @@
+.env
+Dockerfile.webapp
+Dockerfile
+problem statement.rtf
+api.yaml
+src/__pycache__/
+pdfs_individual/
+debug_detail_pages_v2/
+debug_detail_pages/
+data/
+.venv/
+webapp.yaml
